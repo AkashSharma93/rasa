@@ -88,7 +88,7 @@ model_tokens_cleaners = {
     # "xlm": xlm_tokens_pre_processor,
     "distilbert": bert_tokens_cleaner,  # uses the same as BERT
     "roberta": gpt2_tokens_cleaner,  # Uses the same as GPT2
-    "xlm-r": gpt2_tokens_cleaner,
+    "xlm-r": gpt2_tokens_cleaner,  # Uses the same as GPT2
 }
 
 model_embeddings_post_processors = {
