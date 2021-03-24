@@ -51,6 +51,7 @@ class HFTransformersNLP(Component):
         # an optional path to a specific directory to download
         # and cache the pre-trained model weights.
         "cache_dir": None,
+        "from_pt": False,
     }
 
     def __init__(
@@ -90,6 +91,7 @@ class HFTransformersNLP(Component):
 
         self.model_weights = self.component_config["model_weights"]
         self.cache_dir = self.component_config["cache_dir"]
+        self.from_pt = self.component_config["from_pt"] or False
 
         if not self.model_weights:
             logger.info(
@@ -122,7 +124,7 @@ class HFTransformersNLP(Component):
             self.model_weights, cache_dir=self.cache_dir
         )
         self.model = model_class_dict[self.model_name].from_pretrained(
-            self.model_weights, cache_dir=self.cache_dir
+            self.model_weights, cache_dir=self.cache_dir, from_pt=self.from_pt
         )
 
         # Use a universal pad token since all transformer architectures do not have a
