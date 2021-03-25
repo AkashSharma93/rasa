@@ -32,6 +32,7 @@ MAX_SEQUENCE_LENGTHS = {
     "xlnet": NO_LENGTH_RESTRICTION,
     "distilbert": 512,
     "roberta": 512,
+    "xlm-r": 512
 }
 
 logger = logging.getLogger(__name__)
