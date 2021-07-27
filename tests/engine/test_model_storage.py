@@ -127,10 +127,26 @@ class TestLocalModelStorage(ModelStorageTest):
         return str(tmp_path)
 
 
+class MockFS(OSFS):
+    pass
+
+
+@registry.install
+class MockFSOpener(Opener):
+    protocols = ["rasa"]
+
+    def open_fs(self, fs_url, parse_result, writeable, create, cwd):
+        return MockFS(fs_url.replace("rasa://", ""), create=create)
+
+
 class TestInmemoryModelStorage(ModelStorageTest):
     @pytest.fixture()
-    def archive_url(self) -> Text:
-        return "mem:///my_model.tar.gz"
+    def archive_url(self, tmp_path: Path) -> Text:
+        return f'rasa://{tmp_path / "my_model.tar.gz"}'
+
+    @pytest.fixture()
+    def component_storage_directory(self, tmp_path: Path) -> Text:
+        return f"rasa://{tmp_path}"
 
 
 def test_resource_caching(tmp_path_factory: TempPathFactory):
