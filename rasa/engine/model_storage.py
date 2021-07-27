@@ -12,7 +12,7 @@ from typing import Text, ContextManager, TypeVar, Dict, Any, Tuple
 import fs.move
 import fs.copy
 import fs.errors
-from fs.osfs import OSFS
+from fs.base import FS
 from fs.tarfs import TarFS
 import fs.tempfs
 
@@ -33,6 +33,8 @@ MODEL_ARCHIVE_COMPONENTS_DIR = "components"
 MODEL_ARCHIVE_TRAIN_SCHEMA_FILE = "train_schema.yml"
 MODEL_ARCHIVE_PREDICT_SCHEMA_FILE = "predict_schema.yml"
 MODEL_ARCHIVE_METADATA_FILE = "metadata.json"
+
+# TODO: make dataclass a typed dict
 
 
 @dataclass
@@ -56,26 +58,8 @@ class Resource:
 
 
 class ModelStorage:
-    def __init__(self, path_to_model_file: Text) -> None:
-        self._path_to_model_file = path_to_model_file
-
-        self._resource_parent_directory = self._resource_parent_directory(
-            path_to_model_file
-        )
-
-    @staticmethod
-    def _resource_parent_directory(path_to_model_file: Text) -> Text:
-        parent = fs.path.dirname(path_to_model_file)
-        with fs.open_fs(parent) as filesystem:
-            if isinstance(filesystem, OSFS):
-                return tempfile.mkdtemp()
-
-            directory = filesystem.makedir(f"rasa-training-{uuid.uuid4().hex}")
-            return directory.geturl("/")
-
-    @classmethod
-    def create_for(cls, path_to_model_file: Text) -> "ModelStorage":
-        return cls(path_to_model_file)
+    def __init__(self, storage_path: Text) -> None:
+        self._storage_path = storage_path
 
     @contextmanager
     def write_to(self, resource: Resource) -> ContextManager[Path]:
@@ -85,7 +69,8 @@ class ModelStorage:
             fs.move.move_fs(directory, self._directory_for_resource(resource))
 
     def _directory_for_resource(self, resource: Resource) -> Text:
-        return fs.path.join(self._resource_parent_directory, resource.name)
+        joined = fs.path.combine(self._storage_path, resource.name)
+        return joined
 
     @contextmanager
     def read_from(self, resource: Resource) -> ContextManager[Path]:
@@ -101,6 +86,7 @@ class ModelStorage:
 
     def create_model_package(
         self,
+        model_archive_path: Text,
         train_schema: GraphSchema,
         predict_schema: GraphSchema,
         domain: Domain,
@@ -112,10 +98,7 @@ class ModelStorage:
             # move model content to local disk so we can tar it
             with fs.tarfs.TarFS(model_file, write=True) as tar_fs:
                 fs.move.move_dir(
-                    self._resource_parent_directory,
-                    "/",
-                    tar_fs,
-                    MODEL_ARCHIVE_COMPONENTS_DIR,
+                    self._storage_path, "/", tar_fs, MODEL_ARCHIVE_COMPONENTS_DIR,
                 )
 
                 self._add_schemas_to_archive(train_schema, predict_schema, tar_fs)
@@ -125,11 +108,11 @@ class ModelStorage:
             fs.move.move_file(
                 temp_fs,
                 "model.tar.gz",
-                fs.path.dirname(self._path_to_model_file),
-                fs.path.basename(self._path_to_model_file),
+                fs.path.dirname(model_archive_path),
+                fs.path.basename(model_archive_path),
             )
 
-        return self._path_to_model_file
+        return model_archive_path
 
     @staticmethod
     def _add_schemas_to_archive(
@@ -162,38 +145,58 @@ class ModelStorage:
             encoding=rasa.shared.utils.io.DEFAULT_ENCODING,
         )
 
-    def unpack(self) -> Tuple[GraphSchema, GraphSchema, Domain, Dict[Text, Any]]:
+    def unpack(
+        self, model_archive_path: Text
+    ) -> Tuple[GraphSchema, GraphSchema, Domain, Dict[Text, Any]]:
         with fs.tempfs.TempFS() as temp_fs:
             model_file = temp_fs.getsyspath("model.tar.gz")
 
             fs.move.copy_file(
-                fs.path.dirname(self._path_to_model_file),
-                fs.path.basename(self._path_to_model_file),
+                fs.path.dirname(model_archive_path),
+                fs.path.basename(model_archive_path),
                 temp_fs,
                 "model.tar.gz",
             )
 
             # move model content to local disk so we can tar it
             with fs.tarfs.TarFS(model_file) as tar_fs:
-                train_schema = tar_fs.readtext(
-                    MODEL_ARCHIVE_TRAIN_SCHEMA_FILE,
-                    encoding=rasa.shared.utils.io.DEFAULT_ENCODING,
-                )
-                predict_schema = tar_fs.readtext(
-                    MODEL_ARCHIVE_PREDICT_SCHEMA_FILE,
-                    encoding=rasa.shared.utils.io.DEFAULT_ENCODING,
-                )
-                stringified_metadata = tar_fs.readtext(
-                    MODEL_ARCHIVE_METADATA_FILE,
-                    encoding=rasa.shared.utils.io.DEFAULT_ENCODING,
-                )
-                metadata = json.loads(stringified_metadata)
+                train_schema, predict_schema, = self._read_schemas(tar_fs)
+                metadata = self._load_metadata(tar_fs)
 
-                domain = Domain.from_dict(metadata.pop(METADATA_DOMAIN_KEY))
+                domain = self._extract_domain_from_metadata(metadata)
+
+                fs.copy.copy_dir(
+                    tar_fs, MODEL_ARCHIVE_COMPONENTS_DIR, self._storage_path, "/"
+                )
 
                 return (
-                    rasa.shared.utils.io.read_yaml(train_schema),
-                    rasa.shared.utils.io.read_yaml(predict_schema),
+                    train_schema,
+                    predict_schema,
                     domain,
                     metadata,
                 )
+
+    def _extract_domain_from_metadata(self, metadata: Dict[Text, Any]) -> Domain:
+        serialized_domain = metadata.pop(METADATA_DOMAIN_KEY)
+        return Domain.from_dict(serialized_domain)
+
+    def _load_metadata(self, filesystem: FS) -> Dict[Text, Any]:
+        stringified_metadata = filesystem.readtext(
+            MODEL_ARCHIVE_METADATA_FILE, encoding=rasa.shared.utils.io.DEFAULT_ENCODING,
+        )
+        return json.loads(stringified_metadata)
+
+    def _read_schemas(self, filesystem: FS) -> Tuple[GraphSchema, GraphSchema]:
+        train_schema = filesystem.readtext(
+            MODEL_ARCHIVE_TRAIN_SCHEMA_FILE,
+            encoding=rasa.shared.utils.io.DEFAULT_ENCODING,
+        )
+        predict_schema = filesystem.readtext(
+            MODEL_ARCHIVE_PREDICT_SCHEMA_FILE,
+            encoding=rasa.shared.utils.io.DEFAULT_ENCODING,
+        )
+
+        return (
+            rasa.shared.utils.io.read_yaml(train_schema),
+            rasa.shared.utils.io.read_yaml(predict_schema),
+        )
