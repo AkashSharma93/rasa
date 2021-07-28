@@ -82,6 +82,18 @@ class Resource:
         with model_storage.read_from(self) as resource_directory:
             shutil.copytree(resource_directory, cache_directory, dirs_exist_ok=True)
 
+    def fingerprint(self) -> Text:
+        """Provides fingerprint for `Resource`.
+
+        The fingerprint can be just the name as the persisted resource only changes
+        if the used training data (which is loaded in previous nodes) or the config
+        (which is fingerprinted separately) changes.
+
+        Returns:
+            Fingerprint for `Resource`.
+        """
+        return self.name
+
 
 class ModelStorage:
     """Stores and provides output of `GraphComponents` which persist themselves."""

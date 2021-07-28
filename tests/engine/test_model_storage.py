@@ -128,3 +128,16 @@ def test_resource_caching(tmp_path_factory: TempPathFactory):
     # contents are there
     with new_model_storage.read_from(resource) as temporary_directory:
         assert (temporary_directory / test_filename).read_text() == test_content
+
+
+def test_resource_fingerprinting():
+    resource1 = Resource("resource 1")
+    resource2 = Resource("resource 2")
+
+    fingerprint1 = resource1.fingerprint()
+    fingerprint2 = resource2.fingerprint()
+
+    assert fingerprint1
+    assert fingerprint2
+
+    assert fingerprint1 != fingerprint2
