@@ -1,152 +1,102 @@
-import abc
 import time
 from pathlib import Path
-from typing import Text
 
 import pytest
 from _pytest.tmpdir import TempPathFactory
-from fs.opener import Opener, registry
-from fs.osfs import OSFS
 
 import rasa.shared.utils.io
 from rasa.engine.model_storage import ModelStorage, Resource
 from rasa.shared.core.domain import Domain
 
 
-class ModelStorageTest(abc.ABC):
-    @pytest.fixture()
-    @abc.abstractmethod
-    def archive_url(self) -> Text:
-        pass
+def test_write_to_and_read(tmp_path: Path):
+    test_filename = "file.txt"
+    test_file_content = "hi"
 
-    @pytest.fixture()
-    @abc.abstractmethod
-    def component_storage_directory(self) -> Text:
-        pass
+    test_sub_filename = "sub_file"
+    test_sub_dir_name = "sub_directory"
+    test_sub_file_content = "sub file"
 
-    def test_write_to_and_read(self, component_storage_directory: Text):
-        test_filename = "file.txt"
-        test_file_content = "hi"
+    resource = Resource("some_node123")
 
-        test_sub_filename = "sub_file"
-        test_sub_dir_name = "sub_directory"
-        test_sub_file_content = "sub file"
+    model_storage = ModelStorage(tmp_path)
 
-        resource = Resource("some_node123")
+    # Fill model storage for resource
+    with model_storage.write_to(resource) as resource_directory:
+        file = resource_directory / test_filename
+        file.write_text(test_file_content)
 
-        model_storage = ModelStorage(component_storage_directory)
+        sub_directory = resource_directory / test_sub_dir_name
+        sub_directory.mkdir()
+        file_in_sub_directory = sub_directory / test_sub_filename
+        file_in_sub_directory.write_text(test_sub_file_content)
 
-        # Fill model storage for resource
-        with model_storage.write_to(resource) as temporary_directory:
-            file = temporary_directory / test_filename
-            file.write_text(test_file_content)
-
-            sub_directory = temporary_directory / test_sub_dir_name
-            sub_directory.mkdir()
-            file_in_sub_directory = sub_directory / test_sub_filename
-            file_in_sub_directory.write_text(test_sub_file_content)
-
-        # Read written resource data from model storage to see whether all expected
-        # contents are there
-        with model_storage.read_from(resource) as temporary_directory:
-            assert (
-                temporary_directory / test_filename
-            ).read_text() == test_file_content
-            assert (
-                temporary_directory / test_sub_dir_name / test_sub_filename
-            ).read_text() == test_sub_file_content
-
-    def test_read_from_not_existing_resource(self, component_storage_directory: Text):
-        model_storage = ModelStorage(component_storage_directory)
-
-        with model_storage.write_to(Resource("resource1")) as temporary_directory:
-            file = temporary_directory / "file.txt"
-            file.write_text("test")
-
-        with model_storage.read_from(
-            Resource("a different resource")
-        ) as temporary_directory:
-            assert list(temporary_directory.glob("*")) == []
-
-    def test_create_model_package(
-        self,
-        archive_url: Text,
-        component_storage_directory: Text,
-        tmp_path: Path,
-        domain: Domain,
-    ):
-        model_storage = ModelStorage(component_storage_directory)
-
-        # Fill model Storage
-        with model_storage.write_to(Resource("resource1")) as temporary_directory:
-            file = temporary_directory / "file.txt"
-            file.write_text("test")
-
-        # Package model
-        train_schema = {"train_node": [1, 2, 3]}
-        predict_schema = {"predict_node": [1, 2, 3]}
-        model_metadata = {"some_key": "value"}
-        model_storage.create_model_package(
-            archive_url, train_schema, predict_schema, domain, model_metadata
-        )
-
-        unpacked_directory = tmp_path / "unpackaged"
-        unpacked_directory.mkdir()
-        # new_model_file = unpacked_directory / "some-model.tar.gz"
-        # shutil.move(local_model_package, new_model_file)
-        new_model_storage = ModelStorage(str(unpacked_directory))
-
-        (
-            packaged_train_schema,
-            packaged_predict_schema,
-            packaged_domain,
-            packaged_metadata,
-        ) = new_model_storage.unpack(archive_url)
-
-        assert packaged_train_schema == train_schema
-        assert packaged_predict_schema == predict_schema
-        assert packaged_domain.as_dict() == domain.as_dict()
-
-        assert packaged_metadata.pop("rasa_open_source_version") == rasa.__version__
-        assert float(packaged_metadata.pop("trained_at")) > time.time() - 10
-        assert packaged_metadata.pop("model_id")
-
-        assert packaged_metadata == model_metadata
-
-        persisted_resources = (unpacked_directory).glob("*")
-        assert list(persisted_resources) == [Path(unpacked_directory, "resource1")]
+    # Read written resource data from model storage to see whether all expected
+    # content is there
+    with model_storage.read_from(resource) as resource_directory:
+        assert (resource_directory / test_filename).read_text() == test_file_content
+        assert (
+            resource_directory / test_sub_dir_name / test_sub_filename
+        ).read_text() == test_sub_file_content
 
 
-class TestLocalModelStorage(ModelStorageTest):
-    @pytest.fixture()
-    def archive_url(self, tmp_path: Path) -> Text:
-        yield str(tmp_path / "my_model.tar.gz")
+def test_read_from_not_existing_resource(tmp_path: Path):
+    model_storage = ModelStorage(tmp_path)
 
-    @pytest.fixture()
-    def component_storage_directory(self, tmp_path: Path) -> Text:
-        return str(tmp_path)
+    with model_storage.write_to(Resource("resource1")) as temporary_directory:
+        file = temporary_directory / "file.txt"
+        file.write_text("test")
 
-
-class MockFS(OSFS):
-    pass
+    with pytest.raises(ValueError):
+        with model_storage.read_from(Resource("a different resource")) as _:
+            pass
 
 
-@registry.install
-class MockFSOpener(Opener):
-    protocols = ["rasa"]
+def test_create_model_package(
+    tmp_path_factory: TempPathFactory, domain: Domain,
+):
+    train_model_storage = ModelStorage(tmp_path_factory.mktemp("train model storage"))
 
-    def open_fs(self, fs_url, parse_result, writeable, create, cwd):
-        return MockFS(fs_url.replace("rasa://", ""), create=create)
+    # Fill model Storage
+    with train_model_storage.write_to(Resource("resource1")) as directory:
+        file = directory / "file.txt"
+        file.write_text("test")
 
+    # Package model
+    persisted_model_dir = tmp_path_factory.mktemp("persisted models")
+    archive_path = persisted_model_dir / "my-model.tar.gz"
 
-class TestInmemoryModelStorage(ModelStorageTest):
-    @pytest.fixture()
-    def archive_url(self, tmp_path: Path) -> Text:
-        return f'rasa://{tmp_path / "my_model.tar.gz"}'
+    train_schema = {"train_node": [1, 2, 3]}
+    predict_schema = {"predict_node": [1, 2, 3]}
+    model_metadata = {"some_key": "value"}
 
-    @pytest.fixture()
-    def component_storage_directory(self, tmp_path: Path) -> Text:
-        return f"rasa://{tmp_path}"
+    train_model_storage.create_model_package(
+        archive_path, train_schema, predict_schema, domain, model_metadata
+    )
+
+    # Unpack and inspect packaged model
+    load_model_storage_dir = tmp_path_factory.mktemp("load model storage")
+    load_model_storage = ModelStorage(load_model_storage_dir)
+
+    (
+        packaged_train_schema,
+        packaged_predict_schema,
+        packaged_domain,
+        packaged_metadata,
+    ) = load_model_storage.unpack(archive_path)
+
+    assert packaged_train_schema == train_schema
+    assert packaged_predict_schema == predict_schema
+    assert packaged_domain.as_dict() == domain.as_dict()
+
+    assert packaged_metadata.pop("rasa_open_source_version") == rasa.__version__
+    assert float(packaged_metadata.pop("trained_at")) > time.time() - 10
+    assert packaged_metadata.pop("model_id")
+
+    assert packaged_metadata == model_metadata
+
+    persisted_resources = load_model_storage_dir.glob("*")
+    assert list(persisted_resources) == [Path(load_model_storage_dir, "resource1")]
 
 
 def test_resource_caching(tmp_path_factory: TempPathFactory):
@@ -163,8 +113,10 @@ def test_resource_caching(tmp_path_factory: TempPathFactory):
 
     cache_dir = tmp_path_factory.mktemp("cache_dir")
 
+    # Cache resource
     resource.to_cache(cache_dir, model_storage)
 
+    # Reload resource from cache and inspect
     new_model_storage = ModelStorage(str(tmp_path_factory.mktemp("new_model_storage")))
     reinstantiated_resource = Resource.from_cache(
         cache_dir, resource.name, new_model_storage
