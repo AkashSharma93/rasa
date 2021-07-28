@@ -128,22 +128,36 @@ class TrainingCache:
         return sa.orm.sessionmaker(engine)
 
     def _drop_cache_entries_from_incompatible_versions(self) -> None:
+        incompatible_entries = self._find_incompatible_cache_entries()
+
+        for entry in incompatible_entries:
+            self._delete_cached_result(entry)
+
+        self._delete_incompatible_entries_from_cache(incompatible_entries)
+
+        logger.debug(
+            f"Deleted {len(incompatible_entries)} from disk as their version "
+            f"is smaller than the minimum compatible version "
+            f"('{MINIMUM_COMPATIBLE_VERSION}')."
+        )
+
+    def _find_incompatible_cache_entries(self) -> List["TrainingCache.CacheEntry"]:
         with self._sessionmaker() as session:
             query_for_cache_entries = sa.select(self.CacheEntry)
             all_entries: List[TrainingCache.CacheEntry] = session.execute(
                 query_for_cache_entries
             ).scalars().all()
 
-        incompatible_entries = [
+        return [
             entry
             for entry in all_entries
             if version.parse(MINIMUM_COMPATIBLE_VERSION)
             > version.parse(entry.rasa_version)
         ]
 
-        for entry in incompatible_entries:
-            self._delete_persisted(entry)
-
+    def _delete_incompatible_entries_from_cache(
+        self, incompatible_entries: List["TrainingCache.CacheEntry"]
+    ) -> None:
         incompatible_fingerprints = [
             entry.fingerprint_key for entry in incompatible_entries
         ]
@@ -153,14 +167,8 @@ class TrainingCache:
             )
             session.execute(delete_query)
 
-        logger.debug(
-            f"Deleted {len(incompatible_entries)} from disk as their version "
-            f"is smaller than the minimum compatible version "
-            f"('{MINIMUM_COMPATIBLE_VERSION}')."
-        )
-
     @staticmethod
-    def _delete_persisted(entry: "TrainingCache.CacheEntry") -> None:
+    def _delete_cached_result(entry: "TrainingCache.CacheEntry") -> None:
         if entry.result_location and Path(entry.result_location).is_dir():
             shutil.rmtree(entry.result_location)
 
@@ -256,7 +264,7 @@ class TrainingCache:
             if not oldest_cache_item:
                 return
 
-            self._delete_persisted(oldest_cache_item)
+            self._delete_cached_result(oldest_cache_item)
             delete_query = sa.delete(self.CacheEntry).where(
                 self.CacheEntry.fingerprint_key == oldest_cache_item.fingerprint_key
             )
@@ -304,6 +312,24 @@ class TrainingCache:
             persisted data was found
             - Class of persisted data or None in case no persisted data was found.
         """
+        result_location, result_type = self._get_cached_result(output_fingerprint_key)
+
+        if not result_location:
+            logger.debug(f"No cached output found for '{output_fingerprint_key}'")
+            return None, None
+
+        path_to_cached = Path(result_location)
+        if not path_to_cached.is_dir():
+            logger.debug(
+                f"Cached output for '{output_fingerprint_key}' can't be found on disk."
+            )
+            return None, None
+
+        return self._load_from_cache(result_location, result_type)
+
+    def _get_cached_result(
+        self, output_fingerprint_key: Text
+    ) -> Tuple[Optional[Path], Optional[Text]]:
         with self._sessionmaker.begin() as session:
             query = sa.select(
                 self.CacheEntry.result_location, self.CacheEntry.result_type
@@ -311,29 +337,27 @@ class TrainingCache:
                 self.CacheEntry.output_fingerprint_key == output_fingerprint_key,
                 self.CacheEntry.result_location != sa.null(),
             )
+
             match = session.execute(query).first()
 
-        if not match:
-            logger.debug(f"No cached output found for '{output_fingerprint_key}'")
+            if match:
+                return Path(match.result_location), match.result_type
+
             return None, None
 
-        path_to_cached = Path(match.result_location)
-        if not path_to_cached.is_dir():
-            logger.debug(
-                f"Cached output for '{output_fingerprint_key}' can't be found on disk."
-            )
-            return None, None
-
-        module_as_string = match.result_type
+    @staticmethod
+    def _load_from_cache(
+        path_to_cached: Path, result_type: Text
+    ) -> Tuple[Optional[Path], Optional[Type[Cacheable]]]:
         try:
-            module = rasa.shared.utils.common.class_from_module_path(module_as_string)
+            module = rasa.shared.utils.common.class_from_module_path(result_type)
             assert isinstance(module, Cacheable)
 
             return path_to_cached, module
         except Exception as e:
             logger.warning(
                 f"Failed to find module for cached output of type "
-                f"'{module_as_string}'. Error:\n{e}"
+                f"'{result_type}'. Error:\n{e}"
             )
             return None, None
 
