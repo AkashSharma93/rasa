@@ -82,7 +82,7 @@ develop = ["aiomisc (>=11.0,<12.0)", "async-generator", "coverage (!=4.3)", "cov
 name = "appdirs"
 version = "1.4.4"
 description = "A small Python module for determining appropriate platform-specific dirs, e.g. a \"user data dir\"."
-category = "main"
+category = "dev"
 optional = false
 python-versions = "*"
 
@@ -632,22 +632,6 @@ python-versions = ">=3.5"
 
 [package.dependencies]
 python-dateutil = ">=2.7"
-
-[[package]]
-name = "fs"
-version = "2.4.13"
-description = "Python's filesystem abstraction layer"
-category = "main"
-optional = false
-python-versions = "*"
-
-[package.dependencies]
-appdirs = ">=1.4.3,<1.5.0"
-pytz = "*"
-six = ">=1.10,<2.0"
-
-[package.extras]
-scandir = ["scandir (>=1.5,<2.0)"]
 
 [[package]]
 name = "future"
@@ -3173,7 +3157,7 @@ transformers = ["transformers"]
 [metadata]
 lock-version = "1.1"
 python-versions = ">=3.6,<3.9"
-content-hash = "e4fd088673d2918dbaf35abd69f46995ed9680d8c2684d479106adb253e1ef42"
+content-hash = "0a49ea99947e134d67ad845aafd7563c88c320cd5f184121e862210dab6239f4"
 
 [metadata.files]
 absl-py = [
@@ -3562,10 +3546,6 @@ flake8-docstrings = [
 freezegun = [
     {file = "freezegun-1.1.0-py2.py3-none-any.whl", hash = "sha256:2ae695f7eb96c62529f03a038461afe3c692db3465e215355e1bb4b0ab408712"},
     {file = "freezegun-1.1.0.tar.gz", hash = "sha256:177f9dd59861d871e27a484c3332f35a6e3f5d14626f2bf91be37891f18927f3"},
-]
-fs = [
-    {file = "fs-2.4.13-py2.py3-none-any.whl", hash = "sha256:1d10cc8f9c55fbcf7b23775289a13f6796dca7acd5a135c379f49e87a56a7230"},
-    {file = "fs-2.4.13.tar.gz", hash = "sha256:caab4dc1561d63c92f36ee78976f6a4a01381830d8420ce34a78d4f1bb1dc95f"},
 ]
 future = [
     {file = "future-0.18.2.tar.gz", hash = "sha256:b1bead90b70cf6ec3f0710ae53a525360fa360d306a86583adc6bf83a4db537d"},
