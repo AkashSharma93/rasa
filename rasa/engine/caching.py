@@ -1,10 +1,12 @@
 import logging
 import os
+import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Text, Any, Optional, Tuple, Type
+from typing import Text, Any, Optional, Tuple, Type, List
 
+from packaging import version
 from sqlalchemy.engine import URL
 
 # TODO: Make this a prod dependency
@@ -12,6 +14,7 @@ from typing_extensions import Protocol, runtime_checkable
 
 import rasa
 import rasa.shared.utils.common
+from rasa.constants import MINIMUM_COMPATIBLE_VERSION
 from rasa.engine.model_storage import ModelStorage
 import sqlalchemy as sa
 import sqlalchemy.orm
@@ -110,6 +113,41 @@ class TrainingCache:
         )
         self.Base.metadata.create_all(engine)
         self._sessionmaker = sa.orm.sessionmaker(engine)
+
+        self._drop_cache_entries_from_incompatible_versions()
+
+    def _drop_cache_entries_from_incompatible_versions(self) -> None:
+        with self._sessionmaker() as session:
+            query_for_cache_entries = sa.select(self.CacheEntry)
+            all_entries: List[TrainingCache.CacheEntry] = session.execute(
+                query_for_cache_entries
+            ).scalars().all()
+
+        incompatible_entries = [
+            entry
+            for entry in all_entries
+            if version.parse(MINIMUM_COMPATIBLE_VERSION)
+            > version.parse(entry.rasa_version)
+        ]
+
+        for entry in incompatible_entries:
+            if entry.result_location and Path(entry.result_location).is_dir():
+                shutil.rmtree(entry.result_location)
+
+        incompatible_fingerprints = [
+            entry.fingerprint_key for entry in incompatible_entries
+        ]
+        with self._sessionmaker.begin() as session:
+            delete_query = sa.delete(self.CacheEntry).where(
+                self.CacheEntry.fingerprint_key.in_(incompatible_fingerprints)
+            )
+            session.execute(delete_query)
+
+        logger.debug(
+            f"Deleted {len(incompatible_entries)} from disk as their version "
+            f"is smaller than the minimum compatible version "
+            f"('{MINIMUM_COMPATIBLE_VERSION}')."
+        )
 
     def cache_output(
         self,

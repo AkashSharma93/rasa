@@ -10,7 +10,7 @@ from _pytest.logging import LogCaptureFixture
 from _pytest.monkeypatch import MonkeyPatch
 
 import rasa.shared.utils.io
-from rasa.engine.caching import TrainingCache, CACHE_LOCATION_ENV
+from rasa.engine.caching import TrainingCache, CACHE_LOCATION_ENV, DEFAULT_CACHE_NAME
 from rasa.engine.model_storage import ModelStorage
 
 
@@ -146,3 +146,49 @@ def test_caching_cacheable_fails(
     )
 
     assert temp_cache.get_cached_result(output_fingerprint) == (None, None)
+
+
+def test_removing_no_longer_compatible_cache_entries(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+):
+    model_storage = ModelStorage(tmp_path)
+    monkeypatch.setenv(CACHE_LOCATION_ENV, str(tmp_path))
+
+    cache = TrainingCache()
+
+    # Cache metadata and data
+    fingerprint_key1 = uuid.uuid4().hex
+    output1 = TestCacheableOutput({"something to cache": "dasdaasda"})
+    output_fingerprint1 = uuid.uuid4().hex
+
+    cache.cache_output(fingerprint_key1, output1, output_fingerprint1, model_storage)
+
+    # Cache only metadata (`output` is not `Cacheable`)
+    fingerprint_key2 = uuid.uuid4().hex
+    output_fingerprint2 = uuid.uuid4().hex
+    cache.cache_output(fingerprint_key2, None, output_fingerprint2, model_storage)
+
+    # Pretend we updated Rasa Open Source to a no longer compatible version
+    monkeypatch.setattr(rasa.engine.caching, "MINIMUM_COMPATIBLE_VERSION", "99999.9.9")
+
+    cache_run_by_future_rasa = TrainingCache()
+
+    # Cached output of no longer compatible stuff was deleted
+    assert list(tmp_path.glob("*")) == [tmp_path / DEFAULT_CACHE_NAME]
+
+    # Cached fingerprints can no longer be retrieved
+    assert (
+        cache_run_by_future_rasa.get_cached_output_fingerprint(fingerprint_key1) is None
+    )
+    assert (
+        cache_run_by_future_rasa.get_cached_output_fingerprint(fingerprint_key2) is None
+    )
+
+    assert cache_run_by_future_rasa.get_cached_result(output_fingerprint1) == (
+        None,
+        None,
+    )
+    assert cache_run_by_future_rasa.get_cached_result(output_fingerprint2) == (
+        None,
+        None,
+    )
