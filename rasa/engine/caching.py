@@ -1,7 +1,7 @@
 import logging
 import os
 import shutil
-import uuid
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Text, Any, Optional, Tuple, Type, List
@@ -23,9 +23,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CACHE_LOCATION = Path(".rasa", "cache")
 DEFAULT_CACHE_NAME = "cache.db"
+DEFAULT_CACHE_SIZE_MB = 1000
 
 CACHE_LOCATION_ENV = "RASA_CACHE_DIRECTORY"
 CACHE_DB_NAME_ENV = "RASA_CACHE_NAME"
+CACHE_SIZE_ENV = "RASA_MAX_CACHE_SIZE"
 
 
 @runtime_checkable
@@ -101,20 +103,29 @@ class TrainingCache:
         if not self._cache_location.exists():
             self._cache_location.mkdir(parents=True)
 
+        self._max_cache_size = float(
+            os.environ.get(CACHE_SIZE_ENV, DEFAULT_CACHE_SIZE_MB)
+        )
         self._cache_database_name = os.environ.get(
             CACHE_DB_NAME_ENV, DEFAULT_CACHE_NAME
         )
 
-        engine = sa.create_engine(
-            URL.create(
-                drivername="sqlite",
-                database=str(self._cache_location / self._cache_database_name),
-            )
-        )
-        self.Base.metadata.create_all(engine)
-        self._sessionmaker = sa.orm.sessionmaker(engine)
+        self._sessionmaker = self._create_database()
 
         self._drop_cache_entries_from_incompatible_versions()
+
+    def _create_database(self) -> sqlalchemy.orm.sessionmaker:
+        if self._is_disabled():
+            # Use in-memory database as mock to avoid having to check `_is_disabled`
+            # everywhere
+            database = ""
+        else:
+            database = str(self._cache_location / self._cache_database_name)
+
+        engine = sa.create_engine(URL.create(drivername="sqlite", database=database,))
+        self.Base.metadata.create_all(engine)
+
+        return sa.orm.sessionmaker(engine)
 
     def _drop_cache_entries_from_incompatible_versions(self) -> None:
         with self._sessionmaker() as session:
@@ -131,8 +142,7 @@ class TrainingCache:
         ]
 
         for entry in incompatible_entries:
-            if entry.result_location and Path(entry.result_location).is_dir():
-                shutil.rmtree(entry.result_location)
+            self._delete_persisted(entry)
 
         incompatible_fingerprints = [
             entry.fingerprint_key for entry in incompatible_entries
@@ -148,6 +158,11 @@ class TrainingCache:
             f"is smaller than the minimum compatible version "
             f"('{MINIMUM_COMPATIBLE_VERSION}')."
         )
+
+    @staticmethod
+    def _delete_persisted(entry: "TrainingCache.CacheEntry") -> None:
+        if entry.result_location and Path(entry.result_location).is_dir():
+            shutil.rmtree(entry.result_location)
 
     def cache_output(
         self,
@@ -172,6 +187,9 @@ class TrainingCache:
             model_storage: Required for caching `Cacheable` instances. E.g. `Resource`s
                 use that to copy data from the model storage to the cache.
         """
+        if self._is_disabled():
+            return
+
         cache_dir, output_type = None, None
         if isinstance(output, Cacheable):
             cache_dir, output_type = self._cache_output_to_disk(output, model_storage)
@@ -187,23 +205,67 @@ class TrainingCache:
             )
             session.add(cache_entry)
 
+    def _is_disabled(self) -> bool:
+        return self._max_cache_size == 0.0
+
     def _cache_output_to_disk(
         self, output: Cacheable, model_storage: ModelStorage
     ) -> Tuple[Optional[Text], Optional[Text]]:
-        cache_dir = self._cache_location / uuid.uuid4().hex
-        cache_dir.mkdir()
-        try:
-            output.to_cache(cache_dir, model_storage)
-            output_type = rasa.shared.utils.common.module_path_from_instance(output)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
+                output.to_cache(Path(temp_dir), model_storage)
 
-            logger.debug(f"Caching output of type '{type(output)}' succeeded.")
-            return str(cache_dir.absolute()), output_type
-        except Exception as e:
-            logger.error(
-                f"Caching output of type '{type(output)}' failed with the "
-                f"following error:\n{e}"
+                logger.debug(f"Caching output of type '{type(output)}' succeeded.")
+            except Exception as e:
+                logger.error(
+                    f"Caching output of type '{type(output)}' failed with the "
+                    f"following error:\n{e}"
+                )
+                return None, None
+
+            output_size = _directory_size_in_mb(temp_dir)
+            if output_size > self._max_cache_size:
+                logger.debug(
+                    f"Caching result of type '{type(output)}' was skipped "
+                    f"because it exceeds the maximum cache size of "
+                    f"{self._max_cache_size} MiB."
+                )
+                return None, None
+
+            while (
+                _directory_size_in_mb(self._cache_location) + output_size
+                > self._max_cache_size
+            ):
+                self._drop_least_recently_used_item()
+
+            output_type = rasa.shared.utils.common.module_path_from_instance(output)
+            cache_path = shutil.move(temp_dir, self._cache_location)
+
+            return cache_path, output_type
+
+    def _drop_least_recently_used_item(self) -> None:
+        with self._sessionmaker.begin() as session:
+            query_for_least_recently_used_entry = sa.select(self.CacheEntry).order_by(
+                self.CacheEntry.last_used.asc()
             )
-            return None, None
+            oldest_cache_item = (
+                session.execute(query_for_least_recently_used_entry).scalars().first()
+            )
+
+            # TODO: Can't happen
+            if not oldest_cache_item:
+                return
+
+            self._delete_persisted(oldest_cache_item)
+            delete_query = sa.delete(self.CacheEntry).where(
+                self.CacheEntry.fingerprint_key == oldest_cache_item.fingerprint_key
+            )
+            session.execute(delete_query)
+
+            logger.debug(
+                f"Deleted item with fingerprint "
+                f"'{oldest_cache_item.fingerprint_key}' to free space."
+            )
 
     def get_cached_output_fingerprint(self, fingerprint_key: Text) -> Optional[Text]:
         """Retrieves fingerprint of output based on fingerprint key.
@@ -217,12 +279,14 @@ class TrainingCache:
             found for the given fingerprint key.
         """
         with self._sessionmaker.begin() as session:
-            query = sa.select(self.CacheEntry.output_fingerprint_key).filter_by(
+            query = sa.select(self.CacheEntry).filter_by(
                 fingerprint_key=fingerprint_key
             )
-            match = session.execute(query).first()
+            match = session.execute(query).scalars().first()
 
             if match:
+                # This result was used during a fingerprint run.
+                match.last_used = datetime.utcnow()
                 return match.output_fingerprint_key
 
             return None
@@ -272,3 +336,13 @@ class TrainingCache:
                 f"'{module_as_string}'. Error:\n{e}"
             )
             return None, None
+
+
+def _directory_size_in_mb(path: Path) -> float:
+    size = 0.0
+    for root, _dirs, files in os.walk(path):
+        for filename in files:
+            size += (Path(root) / filename).stat().st_size
+
+    # bytes to MiB
+    return size / 1_048_576

@@ -10,7 +10,12 @@ from _pytest.logging import LogCaptureFixture
 from _pytest.monkeypatch import MonkeyPatch
 
 import rasa.shared.utils.io
-from rasa.engine.caching import TrainingCache, CACHE_LOCATION_ENV, DEFAULT_CACHE_NAME
+from rasa.engine.caching import (
+    TrainingCache,
+    CACHE_LOCATION_ENV,
+    DEFAULT_CACHE_NAME,
+    CACHE_SIZE_ENV,
+)
 from rasa.engine.model_storage import ModelStorage
 
 
@@ -20,15 +25,26 @@ def temp_cache(tmp_path: Path, monkeypatch: MonkeyPatch) -> TrainingCache:
     return TrainingCache()
 
 
+def _create_test_file_with_size(directory: Path, size_in_mb: float) -> None:
+    with open(directory / "fake_file", mode="wb") as f:
+        f.seek(int(1024 * 1024 * size_in_mb))
+        f.write(b"\0")
+
+
 @dataclasses.dataclass
 class TestCacheableOutput:
 
     value: Dict
+    size_in_mb: int = 0
 
     def to_cache(self, directory: Path, model_storage: ModelStorage) -> None:
         rasa.shared.utils.io.dump_obj_as_json_to_file(
             directory / "cached.json", self.value
         )
+
+        # Can be used to create cache results of desired size
+        if self.size_in_mb:
+            _create_test_file_with_size(directory, self.size_in_mb)
 
     @classmethod
     def from_cache(
@@ -192,3 +208,101 @@ def test_removing_no_longer_compatible_cache_entries(
         None,
         None,
     )
+
+
+def test_skip_caching_if_cache_size_is_zero(tmp_path: Path, monkeypatch: MonkeyPatch):
+    model_storage = ModelStorage(tmp_path)
+    monkeypatch.setenv(CACHE_LOCATION_ENV, str(tmp_path))
+
+    # Disable cache
+    monkeypatch.setenv(CACHE_SIZE_ENV, "0")
+
+    cache = TrainingCache()
+
+    # Cache something
+    fingerprint_key1 = uuid.uuid4().hex
+    output1 = TestCacheableOutput({"something to cache": "dasdaasda"})
+    output_fingerprint1 = uuid.uuid4().hex
+    cache.cache_output(fingerprint_key1, output1, output_fingerprint1, model_storage)
+
+    # not even the database was created ⛔️
+    assert list(tmp_path.glob("*")) == []
+
+    assert cache.get_cached_output_fingerprint(fingerprint_key1) is None
+
+    assert cache.get_cached_result(output_fingerprint1) == (None, None,)
+
+
+def test_skip_caching_if_result_exceeds_max_size(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+):
+    model_storage = ModelStorage(tmp_path)
+    monkeypatch.setenv(CACHE_LOCATION_ENV, str(tmp_path))
+
+    # Pretend we have a cache of size "1"
+    monkeypatch.setenv(CACHE_SIZE_ENV, "1")
+
+    cache = TrainingCache()
+
+    # Cache something
+    fingerprint_key1 = uuid.uuid4().hex
+    output1 = TestCacheableOutput({"something to cache": "dasdaasda"}, size_in_mb=2)
+    output_fingerprint1 = uuid.uuid4().hex
+    cache.cache_output(fingerprint_key1, output1, output_fingerprint1, model_storage)
+
+    assert cache.get_cached_output_fingerprint(fingerprint_key1) == output_fingerprint1
+
+    assert cache.get_cached_result(output_fingerprint1) == (None, None)
+
+
+def test_delete_using_lru_if_cache_exceeds_size(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+):
+    model_storage = ModelStorage(tmp_path)
+    monkeypatch.setenv(CACHE_LOCATION_ENV, str(tmp_path))
+
+    # Pretend we have a cache of size "1"
+    monkeypatch.setenv(CACHE_SIZE_ENV, "5")
+
+    cache = TrainingCache()
+
+    # Cache an item
+    fingerprint_key1 = uuid.uuid4().hex
+    output1 = TestCacheableOutput({"something to cache": "dasdaasda"}, size_in_mb=2)
+    output_fingerprint1 = uuid.uuid4().hex
+    cache.cache_output(fingerprint_key1, output1, output_fingerprint1, model_storage)
+
+    # Cache an non cacheable item to spice it up 🔥
+    fingerprint_key2 = uuid.uuid4().hex
+    output2 = TestCacheableOutput(None)
+    output_fingerprint2 = uuid.uuid4().hex
+    cache.cache_output(fingerprint_key2, output2, output_fingerprint2, model_storage)
+
+    # Cache another item
+    fingerprint_key3 = uuid.uuid4().hex
+    output3 = TestCacheableOutput({"something to cache": "dasdaasda"}, size_in_mb=2)
+    output_fingerprint3 = uuid.uuid4().hex
+    cache.cache_output(fingerprint_key3, output3, output_fingerprint3, model_storage)
+
+    # Assert both are there
+    for output_fingerprint in [output_fingerprint1, output_fingerprint2]:
+        dir, _ = cache.get_cached_result(output_fingerprint)
+        assert dir
+
+    # Checkout the first item as this updates `last_used` and hence affects LRU
+    cache.get_cached_output_fingerprint(fingerprint_key1)
+
+    # Now store something which requires a deletion
+    fingerprint_key4 = uuid.uuid4().hex
+    output4 = TestCacheableOutput({"something to cache": "dasdaasda"}, size_in_mb=2)
+    output_fingerprint4 = uuid.uuid4().hex
+    cache.cache_output(fingerprint_key4, output4, output_fingerprint4, model_storage)
+
+    # Assert cached result 1 and 3 are there
+    for output_fingerprint in [output_fingerprint1, output_fingerprint4]:
+        dir, _ = cache.get_cached_result(output_fingerprint)
+        assert dir
+
+    # Cached result 2 and 3 were deleted
+    assert cache.get_cached_output_fingerprint(fingerprint_key2) is None
+    assert cache.get_cached_result(output_fingerprint3) == (None, None)
