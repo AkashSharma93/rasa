@@ -1,3 +1,4 @@
+from __future__ import annotations
 import logging
 import os
 import shutil
@@ -51,7 +52,7 @@ class Cacheable(Protocol):
     @classmethod
     def from_cache(
         cls, node_name: Text, directory: Path, model_storage: ModelStorage
-    ) -> "Cacheable":
+    ) -> Cacheable:
         """Loads `Cacheable` from cache.
 
         Args:
@@ -141,7 +142,7 @@ class TrainingCache:
             f"('{MINIMUM_COMPATIBLE_VERSION}')."
         )
 
-    def _find_incompatible_cache_entries(self) -> List["TrainingCache.CacheEntry"]:
+    def _find_incompatible_cache_entries(self) -> List[TrainingCache.CacheEntry]:
         with self._sessionmaker() as session:
             query_for_cache_entries = sa.select(self.CacheEntry)
             all_entries: List[TrainingCache.CacheEntry] = session.execute(
@@ -156,7 +157,7 @@ class TrainingCache:
         ]
 
     def _delete_incompatible_entries_from_cache(
-        self, incompatible_entries: List["TrainingCache.CacheEntry"]
+        self, incompatible_entries: List[TrainingCache.CacheEntry]
     ) -> None:
         incompatible_fingerprints = [
             entry.fingerprint_key for entry in incompatible_entries
@@ -168,7 +169,7 @@ class TrainingCache:
             session.execute(delete_query)
 
     @staticmethod
-    def _delete_cached_result(entry: "TrainingCache.CacheEntry") -> None:
+    def _delete_cached_result(entry: TrainingCache.CacheEntry) -> None:
         if entry.result_location and Path(entry.result_location).is_dir():
             shutil.rmtree(entry.result_location)
 
