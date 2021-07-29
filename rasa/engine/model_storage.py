@@ -1,3 +1,4 @@
+from __future__ import annotations
 import logging
 import shutil
 import tarfile
@@ -46,8 +47,8 @@ class Resource:
 
     @classmethod
     def from_cache(
-        cls, cache_directory: Path, resource_name: Text, model_storage: "ModelStorage"
-    ) -> "Resource":
+        cls, cache_directory: Path, resource_name: Text, model_storage: ModelStorage
+    ) -> Resource:
         """Loads a `Resource` from the cache.
 
         This automatically loads the persisted resource into the given `ModelStorage`.
@@ -71,7 +72,7 @@ class Resource:
 
         return resource
 
-    def to_cache(self, cache_directory: Path, model_storage: "ModelStorage") -> None:
+    def to_cache(self, cache_directory: Path, model_storage: ModelStorage) -> None:
         """Persists the `Resource` to the cache.
 
         Args:
