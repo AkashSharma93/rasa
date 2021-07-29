@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Dict, List, Optional, Text
 
 import pytest
@@ -386,7 +385,7 @@ def test_loading_from_previous_node(default_model_storage: ModelStorage):
         "train": SchemaNode(
             needs={},
             uses=PersistableTestComponent,
-            fn="run",
+            fn="train",
             constructor_name="create",
             config={
                 "test_value": test_value,

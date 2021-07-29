@@ -76,7 +76,7 @@ class GraphComponent(ABC):
             resource: Resource locator for this component which can be used to persist
                 and load itself from the `model_storage`.
             execution_context: Information about the current graph run.
-            kwargs: Output values from previous nodes might be passed in as kwargs.
+            kwargs: Output values from previous nodes might be passed in as `kwargs`.
 
         Args:
             config: This config overrides the `default_config`
@@ -142,6 +142,8 @@ class GraphNode:
                 being run.
             model_storage: Storage which graph components can use to persist and load
                 themselves.
+            resource_name: If given the `GraphComponent` will be loaded from the
+                `model_storage` using the given resource.
             execution_context: Information about the current graph run.
         """
         self._node_name: Text = node_name
@@ -191,13 +193,16 @@ class GraphNode:
 
     def _get_resource(self, kwargs: Dict[Text, Any]) -> Resource:
         if "resource" in kwargs:
-            # A parent node provides resource during training
+            # A parent node provides resource during training. The component wrapped
+            # by this `GraphNode` will load itself from this resource.
             return kwargs.pop("resource")
         if self._existing_resource_name:
-            # The component should be loaded from a trained resource during inference
+            # The component should be loaded from a trained resource during inference.
+            # E.g. a classifier might train and persist itself during training and will
+            # then load itself from this resource during inference.
             return Resource(self._existing_resource_name)
         else:
-            # The component gets the chance to persist itself
+            # The component gets a chance to persist itself
             return Resource(self._node_name)
 
     def parent_node_names(self) -> List[Text]:
@@ -233,7 +238,7 @@ class GraphNode:
         model_storage: ModelStorage,
         execution_context: ExecutionContext,
     ) -> GraphNode:
-        """Creates a `GraphNode` from a `SchemaNode`"""
+        """Creates a `GraphNode` from a `SchemaNode`."""
         return cls(
             node_name=node_name,
             component_class=schema_node.uses,

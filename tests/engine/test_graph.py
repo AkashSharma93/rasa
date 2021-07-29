@@ -1,5 +1,4 @@
 from __future__ import annotations
-from pathlib import Path
 from typing import Dict, Text, Any, List
 
 import rasa.shared.utils.io
@@ -54,12 +53,12 @@ class PersistableTestComponent(GraphComponent):
         return cls(config, model_storage, resource, eager_instantiated_value)
 
     def supported_languages(self) -> List[Text]:
-        return ["en"]
+        return []
 
     def required_packages(self) -> List[Text]:
         return []
 
-    def run(self) -> Resource:
+    def train(self) -> Resource:
         with self._model_storage.write_to(self._resource) as directory:
             rasa.shared.utils.io.dump_obj_as_json_to_file(
                 directory / "test.json", self._config["test_value"]
@@ -94,7 +93,7 @@ def test_writing_to_resource_during_training(default_model_storage: ModelStorage
             "test_value": test_value,
             "test_value_for_sub_directory": test_value_for_sub_directory,
         },
-        fn_name="run",
+        fn_name="train",
         inputs={},
         eager=False,
         model_storage=default_model_storage,
