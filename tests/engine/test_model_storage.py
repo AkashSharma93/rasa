@@ -5,8 +5,10 @@ import pytest
 from _pytest.tmpdir import TempPathFactory
 
 import rasa.shared.utils.io
+from rasa.engine.graph import SchemaNode
 from rasa.engine.model_storage import ModelStorage, Resource
 from rasa.shared.core.domain import Domain
+from tests.engine.test_graph import PersistableTestComponent
 
 
 def test_write_to_and_read(default_model_storage: ModelStorage):
@@ -53,6 +55,34 @@ def test_create_model_package(
 ):
     train_model_storage = ModelStorage(tmp_path_factory.mktemp("train model storage"))
 
+    train_schema = {
+        "train": SchemaNode(
+            needs={},
+            uses=PersistableTestComponent,
+            fn="train",
+            constructor_name="create",
+            config={"some_config": 123455, "some more config": [{"nested": "hi"}]},
+        ),
+        "load": SchemaNode(
+            needs={"resource": "train"},
+            uses=PersistableTestComponent,
+            fn="run_inference",
+            constructor_name="load",
+            config={},
+            is_target=True,
+        ),
+    }
+
+    predict_schema = {
+        "run": SchemaNode(
+            needs={},
+            uses=PersistableTestComponent,
+            fn="run",
+            constructor_name="load",
+            config={"some_config": 123455, "some more config": [{"nested": "hi"}]},
+        ),
+    }
+
     # Fill model Storage
     with train_model_storage.write_to(Resource("resource1")) as directory:
         file = directory / "file.txt"
@@ -62,8 +92,6 @@ def test_create_model_package(
     persisted_model_dir = tmp_path_factory.mktemp("persisted models")
     archive_path = persisted_model_dir / "my-model.tar.gz"
 
-    train_schema = {"train_node": [1, 2, 3]}
-    predict_schema = {"predict_node": [1, 2, 3]}
     model_metadata = {"some_key": "value"}
 
     train_model_storage.create_model_package(

@@ -1,8 +1,11 @@
 from __future__ import annotations
+
+from pathlib import Path
 from typing import Dict, Text, Any, List
 
 import rasa.shared.utils.io
-from rasa.engine.graph import GraphNode, GraphComponent, ExecutionContext
+from rasa.engine import graph
+from rasa.engine.graph import GraphNode, GraphComponent, ExecutionContext, SchemaNode
 from rasa.engine.model_storage import ModelStorage, Resource
 
 
@@ -172,3 +175,34 @@ def test_loading_from_resource_eager(default_model_storage: ModelStorage):
     value = node()[node_name]
 
     assert value == test_value
+
+
+def test_serialize_graph_schema(tmp_path: Path):
+    graph_schema = {
+        "train": SchemaNode(
+            needs={},
+            uses=PersistableTestComponent,
+            fn="train",
+            constructor_name="create",
+            config={"some_config": 123455, "some more config": [{"nested": "hi"}]},
+        ),
+        "load": SchemaNode(
+            needs={"resource": "train"},
+            uses=PersistableTestComponent,
+            fn="run_inference",
+            constructor_name="load",
+            config={},
+            is_target=True,
+        ),
+    }
+
+    serialized = graph.graph_schema_as_dict(graph_schema)
+
+    # Dump it to make sure it's actually serializable
+    file_path = tmp_path / "my_graph.yml"
+    rasa.shared.utils.io.write_yaml(serialized, file_path)
+
+    serialized_graph_schema_from_file = rasa.shared.utils.io.read_yaml_file(file_path)
+    graph_schema_from_file = graph.load_graph_schema(serialized_graph_schema_from_file)
+
+    assert graph_schema_from_file == graph_schema

@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import dataclasses
 from abc import ABC, abstractmethod
 from collections import ChainMap
 from dataclasses import dataclass, field
@@ -251,3 +253,44 @@ class GraphNode:
             execution_context=execution_context,
             resource_name=schema_node.resource_name,
         )
+
+
+def graph_schema_as_dict(graph_schema: GraphSchema) -> Dict[Text, Any]:
+    """Returns graph schema in a serializable format.
+
+    Args:
+        graph_schema: The graph schema to serialize.
+
+    Returns:
+        The graph schema in a format which can be dumped as JSON or other formats.
+    """
+    serializable_graph_schema = {}
+    for node_name, node in graph_schema.items():
+        serializable = dataclasses.asdict(node)
+
+        # Classes are not JSON serializable (surprise)
+        serializable["uses"] = f"{node.uses.__module__}.{node.uses.__name__}"
+
+        serializable_graph_schema[node_name] = serializable
+
+    return serializable_graph_schema
+
+
+def load_graph_schema(serialized_graph_schema: Dict[Text, Any]) -> GraphSchema:
+    """Loads a graph schema which has been serialized using `graph_schema_as_dict`.
+
+    Args:
+        serialized_graph_schema: A serialized graph schema.
+
+    Returns:
+        A properly loaded schema.
+    """
+    graph_schema = {}
+    for node_name, serialized_node in serialized_graph_schema.items():
+        # TODO: Test and handle error here
+        serialized_node["uses"] = rasa.shared.utils.common.class_from_module_path(
+            serialized_node["uses"]
+        )
+        graph_schema[node_name] = SchemaNode(**serialized_node)
+
+    return graph_schema

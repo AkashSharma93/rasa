@@ -4,19 +4,20 @@ import shutil
 import tarfile
 import tempfile
 import time
+import typing
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Text, ContextManager, TypeVar, Dict, Any, Tuple, Union, TypedDict
+from typing import Text, ContextManager, Dict, Any, Tuple, Union, TypedDict
 
 import rasa.shared.utils.io
 from rasa.shared.core.domain import Domain
 
-logger = logging.getLogger(__name__)
+if typing.TYPE_CHECKING:
+    from rasa.engine.graph import GraphSchema
 
-# TODO: Reference existing one
-GraphSchema = TypeVar("GraphSchema")
+logger = logging.getLogger(__name__)
 
 # Paths within model archive
 MODEL_ARCHIVE_COMPONENTS_DIR = "components"
@@ -200,11 +201,15 @@ class ModelStorage:
         predict_schema: GraphSchema,
         temporary_directory: Path,
     ) -> None:
+        # TODO: Fix circular imports
+        from rasa.engine import graph
+
         for filename, schema in zip(
             [MODEL_ARCHIVE_TRAIN_SCHEMA_FILE, MODEL_ARCHIVE_PREDICT_SCHEMA_FILE],
             [train_schema, predict_schema],
         ):
-            rasa.shared.utils.io.write_yaml(schema, temporary_directory / filename)
+            serialized = graph.graph_schema_as_dict(schema)
+            rasa.shared.utils.io.write_yaml(serialized, temporary_directory / filename)
 
     @staticmethod
     def _persist_metadata(
@@ -279,11 +284,17 @@ class ModelStorage:
 
     @staticmethod
     def _read_schemas(directory: Path) -> Tuple[GraphSchema, GraphSchema]:
-        return (
-            rasa.shared.utils.io.read_yaml_file(
-                directory / MODEL_ARCHIVE_TRAIN_SCHEMA_FILE
-            ),
-            rasa.shared.utils.io.read_yaml_file(
-                directory / MODEL_ARCHIVE_PREDICT_SCHEMA_FILE
-            ),
+        # TODO: Fix circular imports
+        from rasa.engine import graph
+
+        serialized_train_schema = rasa.shared.utils.io.read_yaml_file(
+            directory / MODEL_ARCHIVE_TRAIN_SCHEMA_FILE
         )
+        train_schema = graph.load_graph_schema(serialized_train_schema)
+
+        serialized_predict_schema = rasa.shared.utils.io.read_yaml_file(
+            directory / MODEL_ARCHIVE_PREDICT_SCHEMA_FILE
+        )
+        predict_schema = graph.load_graph_schema(serialized_predict_schema)
+
+        return train_schema, predict_schema
