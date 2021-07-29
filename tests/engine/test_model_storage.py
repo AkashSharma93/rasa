@@ -9,7 +9,7 @@ from rasa.engine.model_storage import ModelStorage, Resource
 from rasa.shared.core.domain import Domain
 
 
-def test_write_to_and_read(tmp_path: Path):
+def test_write_to_and_read(default_model_storage: ModelStorage):
     test_filename = "file.txt"
     test_file_content = "hi"
 
@@ -19,10 +19,8 @@ def test_write_to_and_read(tmp_path: Path):
 
     resource = Resource("some_node123")
 
-    model_storage = ModelStorage(tmp_path)
-
     # Fill model storage for resource
-    with model_storage.write_to(resource) as resource_directory:
+    with default_model_storage.write_to(resource) as resource_directory:
         file = resource_directory / test_filename
         file.write_text(test_file_content)
 
@@ -33,22 +31,20 @@ def test_write_to_and_read(tmp_path: Path):
 
     # Read written resource data from model storage to see whether all expected
     # content is there
-    with model_storage.read_from(resource) as resource_directory:
+    with default_model_storage.read_from(resource) as resource_directory:
         assert (resource_directory / test_filename).read_text() == test_file_content
         assert (
             resource_directory / test_sub_dir_name / test_sub_filename
         ).read_text() == test_sub_file_content
 
 
-def test_read_from_not_existing_resource(tmp_path: Path):
-    model_storage = ModelStorage(tmp_path)
-
-    with model_storage.write_to(Resource("resource1")) as temporary_directory:
+def test_read_from_not_existing_resource(default_model_storage: ModelStorage):
+    with default_model_storage.write_to(Resource("resource1")) as temporary_directory:
         file = temporary_directory / "file.txt"
         file.write_text("test")
 
     with pytest.raises(ValueError):
-        with model_storage.read_from(Resource("a different resource")) as _:
+        with default_model_storage.read_from(Resource("a different resource")) as _:
             pass
 
 

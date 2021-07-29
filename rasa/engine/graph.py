@@ -6,6 +6,7 @@ import logging
 from typing import Any, Callable, Dict, List, Optional, Text, Type
 
 import rasa.shared.utils.common
+from rasa.engine.model_storage import ModelStorage, Resource
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ class SchemaNode:
     eager: bool = False
     is_target: bool = False
     is_input: bool = False
-    resource_name: Optional[Text] = None  # TODO: type Resource
+    resource_name: Optional[Text] = None
 
 
 GraphSchema = Dict[Text, SchemaNode]
@@ -37,12 +38,20 @@ class GraphComponent(ABC):
     @classmethod
     @abstractmethod
     def create(
-        cls, config: Dict, execution_context: ExecutionContext
+        cls,
+        config: Dict,
+        model_storage: ModelStorage,
+        resource: Resource,
+        execution_context: ExecutionContext,
     ) -> GraphComponent:
         """Creates a new graph component.
 
         Args:
             config: This config overrides the `default_config`
+            model_storage: Storage which graph components can use to persist and load
+                themselves.
+            resource: Resource locator for this component which can be used to persist
+                and load itself from the `model_storage`.
             execution_context: Information about the current graph run.
 
         Returns: An instantiated GraphComponent
@@ -50,12 +59,24 @@ class GraphComponent(ABC):
         ...
 
     @classmethod
-    def load(cls, config: Dict, execution_context: ExecutionContext) -> GraphComponent:
+    def load(
+        cls,
+        config: Dict,
+        model_storage: ModelStorage,
+        resource: Resource,
+        execution_context: ExecutionContext,
+        **kwargs: Any,
+    ) -> GraphComponent:
         """The load method is for creating a component using persisted data.
 
         Args:
             config: This config overrides the `default_config`
+            model_storage: Storage which graph components can use to persist and load
+                themselves.
+            resource: Resource locator for this component which can be used to persist
+                and load itself from the `model_storage`.
             execution_context: Information about the current graph run.
+            kwargs: Output values from previous nodes might be passed in as kwargs.
 
         Args:
             config: This config overrides the `default_config`
@@ -63,7 +84,7 @@ class GraphComponent(ABC):
 
         Returns: An instantiated, loaded GraphComponent
         """
-        return cls.create(config, execution_context)
+        return cls.create(config, model_storage, resource, execution_context)
 
     @abstractmethod
     def supported_languages(self) -> List[Text]:
@@ -104,6 +125,8 @@ class GraphNode:
         fn_name: Text,
         inputs: Dict[Text, Text],
         eager: bool,
+        model_storage: ModelStorage,
+        resource_name: Optional[Text],
         execution_context: ExecutionContext,
     ) -> None:
         """Initializes `GraphNode`.
@@ -117,6 +140,8 @@ class GraphNode:
             inputs: A map from input name to parent node name that provides it.
             eager: Determines if the node is instantiated right away, or just before
                 being run.
+            model_storage: Storage which graph components can use to persist and load
+                themselves.
             execution_context: Information about the current graph run.
         """
         self._node_name: Text = node_name
@@ -133,6 +158,10 @@ class GraphNode:
         self._fn: Callable = getattr(self._component_class, self._fn_name)
         self._inputs: Dict[Text, Text] = inputs
         self._eager: bool = eager
+
+        self._model_storage = model_storage
+        self._existing_resource_name = resource_name
+
         self._execution_context: ExecutionContext = execution_context
 
         self._component: Optional[GraphComponent] = None
@@ -149,9 +178,27 @@ class GraphNode:
             f"{self._component_class.__name__}.{self._constructor_name} "
             f"with config: {self._component_config}, and kwargs: {kwargs}."
         )
+
         self._component: GraphComponent = getattr(  # type: ignore[no-redef]
             self._component_class, self._constructor_name
-        )(self._component_config, self._execution_context, **kwargs)
+        )(
+            self._component_config,
+            self._model_storage,
+            self._get_resource(kwargs),
+            execution_context=self._execution_context,
+            **kwargs,
+        )
+
+    def _get_resource(self, kwargs: Dict[Text, Any]) -> Resource:
+        if "resource" in kwargs:
+            # A parent node provides resource during training
+            return kwargs.pop("resource")
+        if self._existing_resource_name:
+            # The component should be loaded from a trained resource during inference
+            return Resource(self._existing_resource_name)
+        else:
+            # The component gets the chance to persist itself
+            return Resource(self._node_name)
 
     def parent_node_names(self) -> List[Text]:
         """The names of the parent nodes of this node."""
@@ -183,6 +230,7 @@ class GraphNode:
         cls,
         node_name: Text,
         schema_node: SchemaNode,
+        model_storage: ModelStorage,
         execution_context: ExecutionContext,
     ) -> GraphNode:
         """Creates a `GraphNode` from a `SchemaNode`"""
@@ -194,5 +242,7 @@ class GraphNode:
             fn_name=schema_node.fn,
             inputs=schema_node.needs,
             eager=schema_node.eager,
+            model_storage=model_storage,
             execution_context=execution_context,
+            resource_name=schema_node.resource_name,
         )
